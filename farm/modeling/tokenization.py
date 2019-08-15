@@ -93,9 +93,10 @@ class BertTokenizer(BertTokenizer):
                 This should likely be desactivated for Japanese:
                 see: https://github.com/huggingface/pytorch-pretrained-BERT/issues/328
         """
-        super(BertTokenizer, self).__init__(vocab_file, do_lower_case=True, do_basic_tokenize=True, never_split=None, never_split_chars=None,
-                 unk_token="[UNK]", sep_token="[SEP]", pad_token="[PAD]", cls_token="[CLS]",
-                 mask_token="[MASK]", tokenize_chinese_chars=True, **kwargs)
+        super(BertTokenizer, self).__init__(vocab_file, do_lower_case=do_lower_case,
+                 do_basic_tokenize=do_basic_tokenize, never_split=never_split, never_split_chars=never_split_chars,
+                 unk_token=unk_token, sep_token=sep_token, pad_token=pad_token, cls_token=cls_token,
+                 mask_token=mask_token, tokenize_chinese_chars=True, **kwargs)
 
         if not os.path.isfile(vocab_file):
             raise ValueError(
@@ -111,7 +112,6 @@ class BertTokenizer(BertTokenizer):
                                                   never_split_chars=never_split_chars,
                                                   tokenize_chinese_chars=tokenize_chinese_chars)
         self.wordpiece_tokenizer = WordpieceTokenizer(vocab=self.vocab, unk_token=self.unk_token)
-
 
     def add_custom_vocab(self, custom_vocab_file):
         self.vocab = self._load_custom_vocab(custom_vocab_file)
@@ -156,58 +156,82 @@ class BertTokenizer(BertTokenizer):
             logger.info("Updated vocabulary with {} out of {} tokens from custom vocabulary.".format(update_count, len(custom_vocab)))
         return self.vocab
 
+    def tokenize_with_offsets(self, text_segments):
+        #TODO trim segments to max_seq_len
 
+        # tokenize each segment
+        tokenized_segments = [self._tokenize_single_sequence(segment) for segment in text_segments]
 
+        # single text
+        if len(tokenized_segments) == 1:
+            res = {"tokens": self._convert_to_sequence(tokenized_segments[0]["tokens"]),
+                   "offsets": tokenized_segments[0]["offsets"],
+                   "start_of_word": tokenized_segments[0]["start_of_word"]}
+        # two texts
+        elif len(tokenized_segments) == 2:
+            tokens = self._convert_to_sequence(segments=[tokenized_segments[0]["tokens"],[tokenized_segments[1]["tokens"]])
+            res = {"tokens": tokens,
+                   "offsets": tokenized_segments[0]["offsets"] + tokenized_segments[1]["offsets"],
+                   "start_of_word": tokenized_segments[1]["start_of_word"] + tokenized_segments[1]["start_of_word"]}
+        else:
+            # for now the models only have two text segments, but future ones might have more
+            raise ValueError(f"Cannot combine {len(text_segments)} text segments into a single sequence")
+        return res
 
-def tokenize_with_metadata(text, tokenizer, max_seq_len):
-    # split text into "words" (here: simple whitespace tokenizer)
-    words = text.split(" ")
-    word_offsets = []
-    cumulated = 0
-    for idx, word in enumerate(words):
-        word_offsets.append(cumulated)
-        cumulated += len(word) + 1  # 1 because we so far have whitespace tokenizer
+    def _convert_to_sequence(self, segments):
+        sequence = self._cls_token + segments[0] + self._sep_token
+        if len(segments) == 2:
+            sequence += segments[1] + self._sep_token
+        return sequence
 
-    # split "words"into "subword tokens"
-    tokens, offsets, start_of_word = _words_to_tokens(
-        words, word_offsets, tokenizer, max_seq_len
-    )
+    # def _split_seq(self, sequence):
+    #     return segments
 
-    tokenized = {"tokens": tokens, "offsets": offsets, "start_of_word": start_of_word}
-    return tokenized
+    def _tokenize_single_sequence(self, text):
+        # split text into "words" (here: simple whitespace tokenizer)
+        words = text.split(" ")
+        word_offsets = []
+        cumulated = 0
+        for idx, word in enumerate(words):
+            word_offsets.append(cumulated)
+            cumulated += len(word) + 1  # 1 because we so far have whitespace tokenizer
 
+        # split "words" into "subword tokens"
+        tokens, offsets, start_of_word = self._words_to_tokens(words, word_offsets)
+        return {"tokens": tokens, "offsets": offsets, "start_of_word": start_of_word}
 
-def _words_to_tokens(words, word_offsets, tokenizer, max_seq_len):
-    tokens = []
-    token_offsets = []
-    start_of_word = []
-    for w, w_off in zip(words, word_offsets):
-        # Get tokens of single word
-        tokens_word = tokenizer.tokenize(w)
+    def _words_to_tokens(self, words, word_offsets):
+        tokens = []
+        token_offsets = []
+        start_of_word = []
+        for w, w_off in zip(words, word_offsets):
+            # Get tokens of single word
+            tokens_word = self.tokenizer.tokenize(w)
 
-        # Sometimes the tokenizer returns no tokens
-        if len(tokens_word) == 0:
-            continue
-        tokens += tokens_word
+            # Sometimes the tokenizer returns no tokens
+            if len(tokens_word) == 0:
+                continue
+            tokens += tokens_word
 
-        # get gloabl offset for each token in word + save marker for first tokens of a word
-        first_tok = True
-        for tok in tokens_word:
-            token_offsets.append(w_off)
-            w_off += len(tok.replace("##", ""))
-            if first_tok:
-                start_of_word.append(True)
-                first_tok = False
-            else:
-                start_of_word.append(False)
+            # get gloabl offset for each token in word + save marker for first tokens of a word
+            first_tok = True
+            for tok in tokens_word:
+                token_offsets.append(w_off)
+                w_off += len(tok.replace("##", ""))
+                if first_tok:
+                    start_of_word.append(True)
+                    first_tok = False
+                else:
+                    start_of_word.append(False)
 
-    # Clip at max_seq_length. The "-2" is for CLS and SEP token
-    tokens = tokens[: max_seq_len - 2]
-    token_offsets = token_offsets[: max_seq_len - 2]
-    start_of_word = start_of_word[: max_seq_len - 2]
+        # # Clip at max_seq_length. The "-2" is for CLS and SEP token
+        # tokens = tokens[: self.max_seq_len - 2]
+        # token_offsets = token_offsets[: self.max_seq_len - 2]
+        # start_of_word = start_of_word[: self.max_seq_len - 2]
 
-    assert len(tokens) == len(token_offsets) == len(start_of_word)
-    return tokens, token_offsets, start_of_word
+        assert len(tokens) == len(token_offsets) == len(start_of_word)
+        return tokens, token_offsets, start_of_word
+
 
 def _is_punctuation(char, excluded_chars=None):
     """Checks whether `chars` is a punctuation character."""

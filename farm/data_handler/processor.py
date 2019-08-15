@@ -277,6 +277,53 @@ class Processor(ABC):
         except Exception as e:
             logger.warning(f"ML logging didn't work: {e}")
 
+#########################################
+# Inference Processors ####
+#########################################
+class InferenceProcessor(Processor):
+    """
+    Generic processor used at inference time:
+    - fast
+    - no labels
+    - pure encoding of text into pytorch dataset
+    - Doesn't read from file, but only consumes dictionaries (e.g. coming from API requests)
+    """
+
+    def __init__(
+            self,
+            tokenizer,
+            max_seq_len,
+    ):
+
+        super(InferenceProcessor, self).__init__(
+            tokenizer=tokenizer,
+            max_seq_len=max_seq_len,
+            label_list=None,
+            metrics=None,
+            train_filename=None,
+            dev_filename=None,
+            test_filename=None,
+            dev_split=None,
+            data_dir=None,
+            label_dtype=None,
+        )
+
+    def _file_to_dicts(self, file: str) -> [dict]:
+        raise NotImplementedError
+
+    def _dict_to_samples(self, dict: dict) -> [Sample]:
+        # this tokenization also stores offsets
+        tokenized = tokenizer.tokenize_with_offsets(dict["text"])
+        return [Sample(id=None, clear_text=dict, tokenized=tokenized)]
+
+    def _sample_to_features(self, sample) -> dict:
+        features = sample_to_features_text(
+            sample=sample,
+            label_list=self.label_list,
+            max_seq_len=self.max_seq_len,
+            tokenizer=self.tokenizer,
+        )
+        return features
 
 #########################################
 # Sequence Classification Processors ####
@@ -799,7 +846,7 @@ class SquadProcessor(Processor):
         samples = create_samples_squad(entry=dict)
         for sample in samples:
             tokenized = tokenize_with_metadata(
-                text=" ".join(sample.clear_text["doc_tokens"]),
+                text_segments=" ".join(sample.clear_text["doc_tokens"]),
                 tokenizer=self.tokenizer,
                 max_seq_len=self.max_seq_len,
             )

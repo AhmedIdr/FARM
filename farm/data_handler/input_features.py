@@ -38,37 +38,10 @@ def sample_to_features_text(
              in inference mode). The values are lists containing those features.
     :rtype: dict
     """
-
-    label_map = {label: i for i, label in enumerate(label_list)}
-
-    # tokens = tokenizer.tokenize(sample.clear_text["text"])
     tokens = sample.tokenized["tokens"]
-    # tokens = sample.tokenized["word_pieces"]
-    # Account for [CLS] and [SEP] with "- 2"
-    if len(tokens) > max_seq_len - 2:
-        tokens = tokens[: (max_seq_len - 2)]
 
-    # The convention in BERT is:
-    # (a) For sequence pairs:
-    #  tokens:   [CLS] is this jack ##son ##ville ? [SEP] no it is not . [SEP]
-    #  type_ids: 0   0  0    0    0     0       0 0    1  1  1  1   1 1
-    # (b) For single sequences:
-    #  tokens:   [CLS] the dog is hairy . [SEP]
-    #  type_ids: 0   0   0   0  0     0 0
-    #
-    # Where "type_ids" are used to indicate whether this is the first
-    # sequence or the second sequence. The embedding vectors for `type=0` and
-    # `type=1` were learned during pre-training and are added to the wordpiece
-    # embedding vector (and position vector). This is not *strictly* necessary
-    # since the [SEP] token unambiguously separates the sequences, but it makes
-    # it easier for the model to learn the concept of sequences.
-    #
-    # For classification tasks, the first vector (corresponding to [CLS]) is
-    # used as as the "sentence vector". Note that this only makes sense because
-    # the entire model is fine-tuned.
-    tokens = ["[CLS]"] + tokens + ["[SEP]"]
-
-    segment_ids = [0] * len(tokens)
+    #TODO decide how we want to get the segment_ids back (either the tokenizer has them or we calculate them here)
+    segment_ids = sample.tokenized["segment_ids"]
 
     input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
@@ -76,7 +49,7 @@ def sample_to_features_text(
     # tokens are attended to.
     padding_mask = [1] * len(input_ids)
 
-    # Zero-pad up to the sequence length.
+    # Zero-pad up all features to the sequence length.
     padding = [0] * (max_seq_len - len(input_ids))
     input_ids += padding
     padding_mask += padding
@@ -86,8 +59,10 @@ def sample_to_features_text(
     assert len(padding_mask) == max_seq_len
     assert len(segment_ids) == max_seq_len
 
-    # For inference mode
+    # Labels are not present at inference time
     try:
+        label_map = {label: i for i, label in enumerate(label_list)}
+
         if target == "classification":
             label_ids = label_map[sample.clear_text["label"]]
         elif target == "regression":
@@ -145,13 +120,10 @@ def samples_to_features_ner(
     """
 
     # Tokenize words and extend the labels so they are aligned with the tokens
-    # words = sample.clear_text["text"].split(" ")
-    # tokens, initial_mask = words_to_tokens(words, tokenizer, max_seq_len)
 
     tokens = sample.tokenized["tokens"]
     initial_mask = [int(x) for x in sample.tokenized["start_of_word"]]
 
-    # initial_mask =
     # Add CLS and SEP tokens
     tokens = add_cls_sep(tokens, cls_token, sep_token)
     initial_mask = [0] + initial_mask + [0]  # CLS and SEP don't count as initial tokens
